@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  mlton:
+    name: MLton (build + test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install MLton
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mlton
+      - name: Run tests
+        run: make test
+
+  polyml:
+    name: Poly/ML (test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Poly/ML
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y polyml libpolyml-dev
+      - name: Run tests
+        run: make test-poly

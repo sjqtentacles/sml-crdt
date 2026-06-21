@@ -1,0 +1,6 @@
+(* sml-test: public library basis. Re-exports the Test framework (the TEST
+   structure) and the Prop property-testing structure. *)
+
+$(SML_LIB)/basis/basis.mlb
+
+sources.mlb

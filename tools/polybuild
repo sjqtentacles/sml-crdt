@@ -1,0 +1,108 @@
+#!/bin/sh
+#
+# polybuild - build an executable from a flat .mlb file using Poly/ML.
+#
+# This is a small, self-contained alternative to cannam/sml-buildscripts'
+# polybuild (which depends on a companion smlbuild-include.sh). It only
+# understands the portable subset of the MLB format that this project uses:
+# a file is a newline-separated list of paths, where
+#   - lines beginning with $(...) (e.g. the Basis library) are ignored,
+#     since Poly/ML loads the Basis automatically;
+#   - lines ending in .mlb are expanded recursively (relative to the
+#     including file's directory);
+#   - lines ending in .sml/.sig/.fun are `use`d in order, EXCEPT a file
+#     named main.sml, which is skipped: by convention it only contains the
+#     MLton top-level invocation, and Poly/ML uses the exported `main`
+#     instead;
+#   - blank lines and (* ... *) comment-only lines are ignored.
+#
+# The program is expected to define `main : unit -> unit`, which Poly/ML
+# exports as the executable entry point.
+#
+# Usage: tools/polybuild -o OUTPUT FILE.mlb
+
+set -eu
+
+out=""
+mlb=""
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -o) shift; out="$1" ;;
+        *)  mlb="$1" ;;
+    esac
+    shift
+done
+
+if [ -z "$mlb" ] || [ -z "$out" ]; then
+    echo "Usage: polybuild -o OUTPUT FILE.mlb" 1>&2
+    exit 2
+fi
+
+# Strip /* ... */-free SML comments (* ... *) on a single line, then trim.
+strip_line() {
+    printf '%s' "$1" | sed -e 's/(\*.*\*)//g' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
+}
+
+# Recursively print the ordered list of source files referenced by an .mlb.
+# Each recursive call runs in a subshell so its $_dir does not clobber the
+# caller's (POSIX sh has no local variables).
+expand_mlb() (
+    _mlb="$1"
+    _dir=$(dirname "$_mlb")
+    while IFS= read -r _raw || [ -n "$_raw" ]; do
+        _line=$(strip_line "$_raw")
+        [ -z "$_line" ] && continue
+        case "$_line" in
+            \$\(*) continue ;;                      # basis / path vars: skip
+            *.mlb) expand_mlb "$_dir/$_line" ;;     # nested basis: recurse
+            *.sml|*.sig|*.fun)
+                case "$_line" in
+                    main.sml|*/main.sml) : ;;   # skip MLton-only entry shim
+                    *) printf '%s\n' "$_dir/$_line" ;;
+                esac ;;
+            *) continue ;;
+        esac
+    done < "$_mlb"
+)
+
+tmpobj="${TMPDIR:-/tmp}/polybuild.$$.o"
+trap 'rm -f "$tmpobj"' EXIT
+
+# Compile + export the object file via the Poly/ML REPL.
+{
+    expand_mlb "$mlb" | while IFS= read -r f; do
+        printf 'val () = use "%s";\n' "$f"
+    done
+    printf 'val () = PolyML.export("%s", main);\n' "$tmpobj"
+} | poly -q --error-exit
+
+# Link the object into an executable.
+#
+# We do the link ourselves rather than calling `polyc -o`, because some
+# packaged `polyc` scripts quote the whole compiler-plus-flags string as a
+# single command word (e.g. LINK="clang++ -std=gnu++11"), which fails with
+# "command not found" on a correct install. We read the relevant settings
+# out of the installed `polyc` and invoke the linker with word splitting.
+polyc_path=$(command -v polyc)
+libdir=$(sed -n 's/^LIBDIR="\(.*\)"/\1/p' "$polyc_path" | head -n1)
+link=$(sed -n 's/^LINK="\(.*\)"/\1/p' "$polyc_path" | head -n1)
+: "${link:=c++}"
+: "${libdir:=/usr/local/lib}"
+
+# On recent macOS toolchains the new linker can fail on Poly/ML's exported
+# object with "LINKEDIT overlap"; the classic linker handles it. Add the
+# flag only on Darwin so other platforms are unaffected.
+extra_ldflags=""
+case "$(uname -s)" in
+    Darwin) extra_ldflags="-Wl,-ld_classic" ;;
+esac
+
+# shellcheck disable=SC2086  # intentional word splitting on $link/$extra_ldflags
+if ! $link "$tmpobj" -o "$out" $extra_ldflags \
+        -L"$libdir" -Wl,-rpath,"$libdir" -lpolymain -lpolyml; then
+    # Fall back to polyc's own linking if the manual link fails (e.g. a
+    # differently-packaged polyc whose settings we couldn't parse).
+    echo "polybuild: manual link failed, falling back to polyc -o" 1>&2
+    polyc -o "$out" "$tmpobj"
+fi

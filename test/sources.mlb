@@ -1,0 +1,23 @@
+(* Test build for sml-crdt.
+
+   sml-test is a TEST-only dependency: the CRDT library itself is
+   dependency-free (see ../lib/.../sml-crdt/sources.mlb), and only the test
+   suite needs the property-testing `Prop`. We therefore include the vendored
+   sml-test library here, never from the library's own basis.
+
+   Include order matters for the flat Poly/ML `use` model (tools/polybuild):
+     1. the vendored sml-test library (defines structure Test, hence Test.Prop);
+     2. our own plain-check Harness (no name clash -- sml-test's library
+        exports only the Test structure, not a Harness);
+     3. the CRDT library under test;
+     4. the suite + Poly/ML entry + MLton main shim. *)
+
+$(SML_LIB)/basis/basis.mlb
+
+../lib/github.com/sjqtentacles/sml-test/sources.mlb
+../lib/github.com/sjqtentacles/sml-crdt/sources.mlb
+
+harness.sml
+test.sml
+entry.sml
+main.sml

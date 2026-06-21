@@ -1,0 +1,8 @@
+(* Source files for sml-crdt, in dependency order. Dependency-free: the
+   library uses nothing beyond the Basis. The sml-test dependency is a
+   test-only utility and is wired in from test/sources.mlb instead. *)
+
+$(SML_LIB)/basis/basis.mlb
+
+crdt.sig
+crdt.sml

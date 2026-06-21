@@ -1,0 +1,7 @@
+(* Source files for sml-test, in dependency order. Dependency-free: the
+   property-testing RNG is a self-contained SplitMix64 living in test.sml. *)
+
+$(SML_LIB)/basis/basis.mlb
+
+test.sig
+test.sml

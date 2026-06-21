@@ -1,0 +1,6 @@
+(* sml-crdt: public library basis. Exports the Crdt structure (GCounter,
+   PNCounter, LWWRegister, ORSet) and nothing else. *)
+
+$(SML_LIB)/basis/basis.mlb
+
+sources.mlb

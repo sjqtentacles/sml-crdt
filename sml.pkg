@@ -1,0 +1,5 @@
+package github.com/sjqtentacles/sml-crdt
+
+require {
+  github.com/sjqtentacles/sml-test
+}
