@@ -8,7 +8,7 @@ on:
 
 jobs:
   mlton:
-    name: MLton (build + test)
+    name: MLton (build + test + example)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -18,9 +18,23 @@ jobs:
           sudo apt-get install -y mlton
       - name: Run tests
         run: make test
+      - name: Run example
+        run: make example
+      - name: Capture raw output
+        # Raw binary stdout only — never `make | tee`, whose command echoes
+        # differ between the mlton/poly targets and would break the byte diff.
+        run: |
+          ./bin/test-mlton > test-out.txt
+          make -s example > demo-out.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: out-mlton
+          path: |
+            test-out.txt
+            demo-out.txt
 
   polyml:
-    name: Poly/ML (test)
+    name: Poly/ML (test + example)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -30,3 +44,33 @@ jobs:
           sudo apt-get install -y polyml libpolyml-dev
       - name: Run tests
         run: make test-poly
+      - name: Run example
+        run: make example-poly
+      - name: Capture raw output
+        run: |
+          ./bin/test-poly > test-out.txt
+          make -s example-poly > demo-out.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: out-poly
+          path: |
+            test-out.txt
+            demo-out.txt
+
+  byte-identical:
+    name: Byte-identical output
+    runs-on: ubuntu-latest
+    needs: [mlton, polyml]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: out-mlton
+          path: mlton
+      - uses: actions/download-artifact@v4
+        with:
+          name: out-poly
+          path: poly
+      - name: Diff test output
+        run: diff mlton/test-out.txt poly/test-out.txt
+      - name: Diff example output
+        run: diff mlton/demo-out.txt poly/demo-out.txt

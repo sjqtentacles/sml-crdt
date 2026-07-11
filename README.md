@@ -83,6 +83,36 @@ val s = Crdt.ORSet.add 0 42 s
 val present = Crdt.ORSet.member 42 (Crdt.ORSet.remove 42 s)   (* false *)
 ```
 
+Running [`examples/demo.sml`](examples/demo.sml) with `make example` simulates
+two replicas mutating a `GCounter`, a `PNCounter`, an `LWWRegister`, and an
+`ORSet` independently, then merges each pair to show convergence (output is
+byte-identical under MLton and Poly/ML):
+
+```
+sml-crdt demo
+
+GCounter (replicas 1 and 2 increment independently):
+  replica 1 value = 6
+  replica 2 value = 3
+  merged value    = 9
+  merged canonical = [(1,6),(2,3)]
+
+PNCounter (replica 1 increments, replica 2 decrements):
+  replica 1 value = 9
+  replica 2 value = ~4
+  merged value    = 5
+
+LWWRegister (higher logical timestamp wins on merge):
+  merge ts=1 "hello" with ts=2 "world" -> world
+  tie at ts=5, replica 1 "A" vs replica 2 "B" -> B (higher replica wins)
+
+ORSet (concurrent add survives a remove that never observed it):
+  replica 1 after remove: member 42 = false
+  replica 2 concurrent add: member 42 = true
+  merged: member 42 = true (survives: the concurrent add's tag was never tombstoned)
+  single-replica add then remove: member 99 = false
+```
+
 ## Design notes
 
 - **Canonical state.** Counters keep per-replica maps as assoc lists sorted by
