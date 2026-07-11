@@ -11,31 +11,40 @@
 #   - lines ending in .mlb are expanded recursively (relative to the
 #     including file's directory);
 #   - lines ending in .sml/.sig/.fun are `use`d in order, EXCEPT a file
-#     named main.sml, which is skipped: by convention it only contains the
-#     MLton top-level invocation, and Poly/ML uses the exported `main`
-#     instead;
-#   - blank lines and (* ... *) comment-only lines are ignored.
+#     named main.sml, which is skipped in export mode: by convention it only
+#     contains the MLton top-level invocation, and Poly/ML uses the exported
+#     `main` instead;
+#   - blank lines and (* ... *) comments are ignored, including comment
+#     blocks spanning multiple lines (no nesting).
 #
 # The program is expected to define `main : unit -> unit`, which Poly/ML
 # exports as the executable entry point.
 #
 # Usage: tools/polybuild -o OUTPUT FILE.mlb
+#        tools/polybuild -r FILE.mlb
+#
+# -r runs the program instead of linking it: each source is `use`d in order
+# and its top-level effects execute immediately. This suits demo scripts
+# (examples/demo.sml). In run mode main.sml is NOT skipped: for main-style
+# demos it is exactly the file whose `val () = main ()` runs the program.
 
 set -eu
 
 out=""
 mlb=""
+runmode=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
         -o) shift; out="$1" ;;
+        -r) runmode=1 ;;
         *)  mlb="$1" ;;
     esac
     shift
 done
 
-if [ -z "$mlb" ] || [ -z "$out" ]; then
-    echo "Usage: polybuild -o OUTPUT FILE.mlb" 1>&2
+if [ -z "$mlb" ] || { [ "$runmode" = 0 ] && [ -z "$out" ]; }; then
+    echo "Usage: polybuild -o OUTPUT FILE.mlb | polybuild -r FILE.mlb" 1>&2
     exit 2
 fi
 
@@ -50,28 +59,75 @@ strip_line() {
 expand_mlb() (
     _mlb="$1"
     _dir=$(dirname "$_mlb")
+    _incomment=0
     while IFS= read -r _raw || [ -n "$_raw" ]; do
+        if [ "$_incomment" = 1 ]; then
+            case "$_raw" in
+                *'*)'*) _incomment=0; _raw=${_raw#*\*\)} ;;
+                *) continue ;;
+            esac
+        fi
         _line=$(strip_line "$_raw")
+        case "$_line" in
+            *'(*'*) _incomment=1; _line=$(strip_line "${_line%%\(\**}") ;;
+        esac
         [ -z "$_line" ] && continue
         case "$_line" in
             \$\(*) continue ;;                      # basis / path vars: skip
             *.mlb) expand_mlb "$_dir/$_line" ;;     # nested basis: recurse
             *.sml|*.sig|*.fun)
                 case "$_line" in
-                    main.sml|*/main.sml) : ;;   # skip MLton-only entry shim
-                    *) printf '%s\n' "$_dir/$_line" ;;
+                    main.sml|*/main.sml)
+                        # MLton entry shim: skipped when exporting main, kept
+                        # in run mode (it is what invokes the program there).
+                        if [ "${POLYBUILD_KEEP_MAIN:-0}" = 1 ]; then
+                            _p="$_dir/$_line"
+                            _pd=$(CDPATH= cd "$(dirname "$_p")" 2>/dev/null && pwd)
+                            if [ -n "$_pd" ]; then
+                                printf '%s\n' "$_pd/$(basename "$_p")"
+                            else
+                                printf '%s\n' "$_p"
+                            fi
+                        fi ;;
+                    *)
+                        # Canonicalize so the same file reached via different
+                        # relative prefixes (diamond deps) dedups downstream.
+                        _p="$_dir/$_line"
+                        _pd=$(CDPATH= cd "$(dirname "$_p")" 2>/dev/null && pwd)
+                        if [ -n "$_pd" ]; then
+                            printf '%s\n' "$_pd/$(basename "$_p")"
+                        else
+                            printf '%s\n' "$_p"
+                        fi ;;
                 esac ;;
             *) continue ;;
         esac
     done < "$_mlb"
 )
 
+# Files reachable through more than one nested .mlb (diamond dependencies,
+# common once libraries vendor shared deps) must be `use`d only once: each
+# opaque (:>) ascription elaborates to a fresh type, so a second `use` of the
+# same source would shadow the first with incompatible types. We therefore
+# deduplicate the expanded file list, keeping first occurrence (which is in
+# dependency order).
+
+# Run mode: `use` everything (top-level effects execute) and stop.
+if [ "$runmode" = 1 ]; then
+    POLYBUILD_KEEP_MAIN=1
+    export POLYBUILD_KEEP_MAIN
+    expand_mlb "$mlb" | awk '!seen[$0]++' | while IFS= read -r f; do
+        printf 'val () = use "%s";\n' "$f"
+    done | poly -q --error-exit
+    exit 0
+fi
+
 tmpobj="${TMPDIR:-/tmp}/polybuild.$$.o"
 trap 'rm -f "$tmpobj"' EXIT
 
 # Compile + export the object file via the Poly/ML REPL.
 {
-    expand_mlb "$mlb" | while IFS= read -r f; do
+    expand_mlb "$mlb" | awk '!seen[$0]++' | while IFS= read -r f; do
         printf 'val () = use "%s";\n' "$f"
     done
     printf 'val () = PolyML.export("%s", main);\n' "$tmpobj"
