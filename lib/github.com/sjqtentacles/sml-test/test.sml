@@ -18,6 +18,35 @@ struct
 
   fun fail msg = raise TestFailure msg
 
+  (* Deterministic real formatting for diagnostic messages and the property
+     generator's `show`. Real.toString differs between MLton and Poly/ML
+     (e.g. "30" vs "30.0"), which would make failure messages and
+     counterexample reports depend on the compiler. Searches Real.fmt
+     FIX(0), FIX(1), ... for the first fixed-decimal rendering that
+     reparses to the same real (Real.fmt is byte-identical across both
+     compilers); falls back to scientific notation past 15 fixed digits. *)
+  fun fmtRealDet r =
+    if Real.isNan r then "nan"
+    else if Real.== (r, Real.posInf) then "inf"
+    else if Real.== (r, Real.negInf) then "~inf"
+    else
+      let
+        val neg = r < 0.0
+        val a = Real.abs r
+        fun tryDigits n =
+          if n > 15 then NONE
+          else
+            let val s = Real.fmt (StringCvt.FIX (SOME n)) a
+            in case Real.fromString s of
+                   SOME a' => if Real.== (a', a) then SOME s else tryDigits (n + 1)
+                 | NONE => tryDigits (n + 1)
+            end
+        val body =
+          case tryDigits 0 of
+              SOME s => s
+            | NONE => Real.fmt (StringCvt.SCI (SOME 16)) a
+      in if neg then "~" ^ body else body end
+
   fun assert b = if b then () else fail "assertion failed"
   fun assertMsg msg b = if b then () else fail msg
   fun assertEq (expected, actual) =
@@ -31,8 +60,8 @@ struct
     if Real.isFinite (expected - actual)
        andalso Real.abs (expected - actual) <= epsilon
     then ()
-    else fail (Real.toString expected ^ " not within " ^ Real.toString epsilon
-               ^ " of " ^ Real.toString actual)
+    else fail (fmtRealDet expected ^ " not within " ^ fmtRealDet epsilon
+               ^ " of " ^ fmtRealDet actual)
 
   (* ---- Property-based testing ---------------------------------------
      A self-contained SplitMix64 drives generation. A generator bundles a
@@ -144,7 +173,7 @@ struct
                 val top53 = W.>> (w, 0w11)
             in Real.fromLargeInt (W.toLargeInt top53) / 9007199254740992.0 end
         , shrink = fn _ => []
-        , show = Real.toString }
+        , show = fmtRealDet }
 
       (* printable ASCII 32..126 *)
       val char : char gen =
